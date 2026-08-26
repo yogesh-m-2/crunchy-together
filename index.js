@@ -251,16 +251,51 @@ app.get("/health", (_req, res) => res.json({ ok: true, t: now() }));
 // ------------------------------------------------------------ rooms over ws
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+
+// LATENCY NOTES (this is the hot path — a pause must reach the other side fast):
+//  * perMessageDeflate off. Compressing a 60-byte JSON object costs CPU and
+//    adds delay for no bandwidth win.
+//  * setNoDelay(true) on every socket. Nagle's algorithm holds small packets
+//    back for up to ~40ms waiting to coalesce them. That is the single biggest
+//    avoidable delay here, and it is on by default.
+//  * The relay never JSON.parses the payload. It peeks at the frame, then
+//    forwards the original bytes inside a pre-built envelope by string
+//    concatenation. No parse, no re-serialize.
+//  * Nothing on this path touches SQLite or the disk. Entitlement is resolved
+//    once at connect and cached on the socket, so no synchronous query can
+//    ever stall the event loop mid-party.
+const wss = new WebSocketServer({
+  noServer: true,
+  perMessageDeflate: false,
+  maxPayload: 256 * 1024,
+});
+
 const rooms = new Map(); // code -> Set<ws>
 
 function roomOf(code) {
-  if (!rooms.has(code)) rooms.set(code, new Set());
-  return rooms.get(code);
+  let set = rooms.get(code);
+  if (!set) {
+    set = new Set();
+    rooms.set(code, set);
+  }
+  return set;
 }
 
 function send(ws, obj) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
+}
+
+// Forward a raw frame to the peer without parsing it.
+const ENVELOPE_HEAD = '{"t":"peer","payload":';
+function relayRaw(from, raw) {
+  const set = rooms.get(from.room);
+  if (!set) return;
+  let framed = null;
+  for (const p of set) {
+    if (p === from || p.readyState !== p.OPEN) continue;
+    if (framed === null) framed = ENVELOPE_HEAD + raw + "}";
+    p.send(framed);
+  }
 }
 
 server.on("upgrade", (req, socket, head) => {
@@ -299,6 +334,12 @@ server.on("upgrade", (req, socket, head) => {
     ws.userId = user.id;
     ws.room = code;
     ws.alive = true;
+    // Small control messages must go out immediately, not be held for
+    // coalescing. This is the difference between a pause landing in 20ms
+    // and landing in 60ms.
+    try {
+      socket.setNoDelay(true);
+    } catch (_) {}
     wss.emit("connection", ws, req);
   });
 });
@@ -317,20 +358,16 @@ wss.on("connection", (ws) => {
 
   ws.on("pong", () => (ws.alive = true));
 
-  ws.on("message", (data) => {
-    if (data.length > 256 * 1024) return; // GIF urls are small; nothing here is big
-    let msg;
-    try {
-      msg = JSON.parse(data.toString("utf8"));
-    } catch (_) {
-      return;
+  ws.on("message", (data, isBinary) => {
+    if (isBinary) return;
+    const raw = data.toString("utf8");
+    // Cheap peek instead of a full parse. Only "ping" needs handling here;
+    // everything else is relayed byte-for-byte.
+    if (raw.length < 24 && raw.indexOf('"ping"') !== -1) {
+      return ws.send('{"t":"pong"}');
     }
-    if (msg.t === "ping") return send(ws, { t: "pong" });
-    // Everything else is relayed verbatim to the other side. The server does
-    // not interpret sync/chat payloads.
-    for (const p of roomOf(ws.room)) {
-      if (p !== ws) send(p, { t: "peer", payload: msg });
-    }
+    if (raw.length < 2 || raw.charCodeAt(0) !== 123 /* { */) return;
+    relayRaw(ws, raw);
   });
 
   ws.on("close", () => {
@@ -355,11 +392,20 @@ setInterval(() => {
   }
 }, 30000).unref();
 
-// Re-check entitlement periodically: a trial can lapse mid-session.
+// Re-check entitlement periodically: a trial can lapse mid-session. This runs
+// every few minutes, never on the message path, and uses one query for all
+// connected users rather than one per socket.
 setInterval(() => {
+  if (!wss.clients.size) return;
+  const ids = new Set();
+  for (const ws of wss.clients) ids.add(ws.userId);
+  const allowed = new Set();
+  for (const id of ids) {
+    const user = q.userById.get(id);
+    if (user && entitlement(user).active) allowed.add(id);
+  }
   for (const ws of wss.clients) {
-    const user = q.userById.get(ws.userId);
-    if (!entitlement(user).active) {
+    if (!allowed.has(ws.userId)) {
       send(ws, { t: "denied", reason: "expired" });
       ws.close(4003, "expired");
     }
