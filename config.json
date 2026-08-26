@@ -1,0 +1,18 @@
+{
+  "api": "https://api.YOURDOMAIN.com",
+  "ws": "wss://api.YOURDOMAIN.com/ws",
+  "fallbacks": [
+    { "api": "https://backup.YOURDOMAIN.com", "ws": "wss://backup.YOURDOMAIN.com/ws" }
+  ],
+  "support_whatsapp": "+918660095124",
+  "price_label": "₹5 / month",
+  "trial_days": 7,
+  "notice": null,
+  "maintenance": false,
+  "min_version": "3.0.0",
+  "ice": [
+    { "urls": "stun:stun.l.google.com:19302" },
+    { "urls": "stun:stun1.l.google.com:19302" },
+    { "urls": "stun:stun.cloudflare.com:3478" }
+  ]
+}
