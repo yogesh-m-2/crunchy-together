@@ -1,7 +1,7 @@
 {
-  "api": "https://api.YOURDOMAIN.com",
-  "ws": "wss://api.YOURDOMAIN.com/ws",
-  "fallbacks": [
+  "api": "https://api.yogeshmallidi.com",
+  "ws": "wss://api.yogeshmallidi.com/ws",
+  "fallbacks": [],"_old": [
     { "api": "https://backup.YOURDOMAIN.com", "ws": "wss://backup.YOURDOMAIN.com/ws" }
   ],
   "support_whatsapp": "+918660095124",
