@@ -1,4 +1,4 @@
-// Crunchy Party — networking.
+// Otaku Sync — networking.
 // Owns: remote config, API calls (proxied through the background so page CSP
 // can't interfere), the room WebSocket, and the WebRTC transport used only
 // for webcam video. Exposes window.CT_NET.
@@ -36,7 +36,7 @@
 
   function api(payload) {
     try {
-      return chrome.runtime.sendMessage({ channel: "crunchy-party-api", ...payload });
+      return chrome.runtime.sendMessage({ channel: "otaku-sync-api", ...payload });
     } catch (_) {
       return Promise.resolve({ error: "extension-reloaded" });
     }
@@ -57,7 +57,7 @@
 
   NET.whatsappUrl = function (msg) {
     const num = NET.support().replace(/[^\d]/g, "");
-    const text = encodeURIComponent(msg || "Hi, I need help with Crunchy Party.");
+    const text = encodeURIComponent(msg || "Hi, I need help with Otaku Sync.");
     return `https://wa.me/${num}?text=${text}`;
   };
 
@@ -79,9 +79,79 @@
     } catch (_) {}
   };
 
-  NET.startOtp = (phone) => api({ type: "post", path: "/auth/otp/start", body: { phone } });
-  NET.verifyOtp = (phone, code) =>
-    api({ type: "post", path: "/auth/otp/verify", body: { phone, code } });
+  // A stable per-install id. NOT a hardware identifier — browsers can't read
+  // MAC addresses — so it identifies this browser profile, and clearing
+  // extension storage resets it.
+  NET.deviceId = async function () {
+    try {
+      const { deviceId } = await chrome.storage.local.get("deviceId");
+      if (deviceId) return deviceId;
+      const fresh = crypto.randomUUID();
+      await chrome.storage.local.set({ deviceId: fresh });
+      return fresh;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  NET.deviceLabel = function () {
+    const ua = navigator.userAgent;
+    const os = /Windows/.test(ua) ? "Windows"
+      : /Mac OS X|Macintosh/.test(ua) ? "Mac"
+      : /Android/.test(ua) ? "Android"
+      : /Linux/.test(ua) ? "Linux"
+      : /iPhone|iPad/.test(ua) ? "iOS"
+      : "Browser";
+    const browser = /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera" : "Chrome";
+    return `${browser} on ${os}`;
+  };
+
+  // Start watching with no sign-in at all: the trial is tied to this device.
+  NET.startGuest = async function () {
+    const device_id = await NET.deviceId();
+    return api({
+      type: "post",
+      path: "/auth/guest",
+      body: { device_id, label: NET.deviceLabel() },
+    });
+  };
+
+  // Sign-in is a device-code flow: create a request, open the hosted page,
+  // poll until the page reports success.
+  NET.startSignIn = async function () {
+    const device_id = await NET.deviceId();
+    return api({ type: "post", path: "/auth/request", body: { device_id } });
+  };
+
+  NET.pollSignIn = async function (rid) {
+    const device_id = await NET.deviceId();
+    return api({
+      type: "post",
+      path: "/auth/poll",
+      body: { rid, device_id, label: NET.deviceLabel() },
+    });
+  };
+
+  NET.devices = () => api({ type: "get", path: "/devices", auth: true });
+
+  NET.logout = async function () {
+    // Tell the server first so the device slot is freed, then drop the token
+    // locally regardless of whether that call succeeded.
+    try {
+      await api({ type: "post", path: "/auth/logout", auth: true });
+    } catch (_) {}
+    await NET.setToken(null);
+  };
+
+  NET.revokeDevice = (id, token) =>
+    api({
+      type: "post",
+      path: "/devices/revoke",
+      body: { id, label: NET.deviceLabel() },
+      auth: true,
+      token,
+    });
+
   NET.me = () => api({ type: "get", path: "/me", auth: true });
   NET.subscribe = () => api({ type: "post", path: "/billing/subscribe", auth: true });
   NET.refreshBilling = () => api({ type: "post", path: "/billing/refresh", auth: true });
@@ -227,28 +297,19 @@
 
   // -------------------------------------------------------------- webcam
   //
-  // One RTCPeerConnection with a single video sender in each direction. The
-  // sender always carries a track — a blank canvas track when the cam is off —
-  // so toggling a cam is just replaceTrack() with no renegotiation. That is
-  // what makes both cams show reliably regardless of who enables first.
+  // W3C "perfect negotiation": either side may (re)negotiate at any time;
+  // glare is resolved by roles — the guest is the "polite" peer and rolls
+  // back on collision, the host is "impolite" and ignores colliding offers.
+  // Each side adds its OWN track when its cam turns on (which triggers
+  // renegotiation automatically), so the order people press "Cam on" in can
+  // never matter again.
 
   let pc = null;
-  let localSender = null;
-  let blankTrack = null;
-  let blankCanvas = null;
+  let camSender = null;
   let makingOffer = false;
+  let ignoreOffer = false;
 
-  function blank() {
-    if (blankTrack && blankTrack.readyState === "live") return blankTrack;
-    blankCanvas = document.createElement("canvas");
-    blankCanvas.width = 2;
-    blankCanvas.height = 2;
-    const ctx = blankCanvas.getContext("2d");
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, 2, 2);
-    blankTrack = blankCanvas.captureStream(1).getVideoTracks()[0];
-    return blankTrack;
-  }
+  const polite = () => NET.role !== "host";
 
   function ensurePc() {
     if (pc) return pc;
@@ -261,70 +322,76 @@
     pc.addEventListener("track", (e) => {
       const stream = e.streams[0] || new MediaStream([e.track]);
       NET.onRemoteStream && NET.onRemoteStream(stream);
+      e.track.addEventListener("ended", () => {
+        NET.onRemoteStream && NET.onRemoteStream(null);
+      });
+    });
+
+    pc.addEventListener("negotiationneeded", async () => {
+      try {
+        makingOffer = true;
+        await pc.setLocalDescription();
+        NET.send({ t: "rtc", kind: "desc", sdp: pc.localDescription });
+      } catch (e) {
+        console.debug("[otaku-sync] negotiation failed", e);
+      } finally {
+        makingOffer = false;
+      }
     });
 
     pc.addEventListener("connectionstatechange", () => {
-      if (["failed", "closed"].includes(pc.connectionState)) {
+      if (pc && ["failed", "closed"].includes(pc.connectionState)) {
         NET.onRemoteStream && NET.onRemoteStream(null);
       }
     });
 
-    localSender = pc.addTrack(blank());
     return pc;
   }
 
-  async function negotiate() {
-    // Only the host offers, so the two sides can't collide.
-    if (NET.role !== "host" || !pc || makingOffer) return;
-    try {
-      makingOffer = true;
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      NET.send({ t: "rtc", kind: "offer", sdp: pc.localDescription });
-    } catch (e) {
-      console.debug("[crunchy-party] offer failed", e);
-    } finally {
-      makingOffer = false;
-    }
-  }
-
   async function handleSignal(msg) {
+    const p = ensurePc();
     try {
-      if (msg.kind === "offer") {
-        ensurePc();
-        await pc.setRemoteDescription(msg.sdp);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        NET.send({ t: "rtc", kind: "answer", sdp: pc.localDescription });
-      } else if (msg.kind === "answer") {
-        if (pc && pc.signalingState !== "stable") await pc.setRemoteDescription(msg.sdp);
-      } else if (msg.kind === "ice") {
-        if (pc && msg.candidate) await pc.addIceCandidate(msg.candidate).catch(() => {});
+      if (msg.kind === "desc" && msg.sdp) {
+        const desc = msg.sdp;
+        const collision = desc.type === "offer" && (makingOffer || p.signalingState !== "stable");
+        ignoreOffer = !polite() && collision;
+        if (ignoreOffer) return;
+        await p.setRemoteDescription(desc); // polite side rolls back implicitly
+        if (desc.type === "offer") {
+          await p.setLocalDescription();
+          NET.send({ t: "rtc", kind: "desc", sdp: p.localDescription });
+        }
+      } else if (msg.kind === "ice" && msg.candidate) {
+        try {
+          await p.addIceCandidate(msg.candidate);
+        } catch (e) {
+          if (!ignoreOffer) console.debug("[otaku-sync] ice failed", e);
+        }
       }
     } catch (e) {
-      console.debug("[crunchy-party] signal failed", e);
+      console.debug("[otaku-sync] signal failed", e);
     }
   }
 
-  // Called when our cam turns on/off. Starts media if needed, then swaps the
-  // outgoing track in place.
+  // Our cam turned on (stream) or off (null). addTrack/removeTrack fire
+  // negotiationneeded, and perfect negotiation does the rest.
   NET.setLocalCam = async function (stream) {
-    ensurePc();
-    const track = stream ? stream.getVideoTracks()[0] : blank();
-    if (localSender) {
+    const p = ensurePc();
+    if (camSender) {
       try {
-        await localSender.replaceTrack(track);
+        p.removeTrack(camSender);
       } catch (_) {}
+      camSender = null;
     }
-    // First time through (or after a reconnect) the host must offer.
-    if (!pc.currentRemoteDescription) await negotiate();
+    if (stream) {
+      const track = stream.getVideoTracks()[0];
+      if (track) camSender = p.addTrack(track, stream);
+    }
   };
 
-  // Kick media off once both sides are present, so cams can appear instantly
-  // when either person enables one later.
+  // Create the connection early so incoming tracks are never missed.
   NET.primeMedia = async function () {
     ensurePc();
-    await negotiate();
   };
 
   function stopMedia() {
@@ -332,8 +399,9 @@
       pc && pc.close();
     } catch (_) {}
     pc = null;
-    localSender = null;
+    camSender = null;
     makingOffer = false;
+    ignoreOffer = false;
     NET.onRemoteStream && NET.onRemoteStream(null);
   }
   NET.stopMedia = stopMedia;

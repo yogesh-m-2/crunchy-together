@@ -1,13 +1,15 @@
-# Crunchy Party
+# Otaku Sync
 
-Watch Crunchyroll in sync with a friend — shared play, pause and seek, plus
-chat, emoji, GIFs, reactions and webcam. Phone-number sign-in, 7-day free
-trial, then a monthly subscription through Razorpay.
+Watch anime in sync with a friend — shared play, pause and seek, plus chat,
+emoji, GIFs, floating reactions and webcam. Google / Facebook / email sign-in,
+7-day free trial, then a monthly subscription through Razorpay.
+
+Works with Crunchyroll. Not affiliated with Crunchyroll or Sony.
 
 ```
-crunchy-party/
+otaku-sync/
 ├── extension/    Chrome extension (MV3)
-├── server/       Node API + WebSocket relay for your Rackners VM
+├── server/       Node API + WebSocket relay for your RackNerd VM
 └── config/       config.json to publish on GitHub
 ```
 
@@ -57,10 +59,13 @@ auto-follow.
 
 - **Privacy policy is mandatory** — you collect phone numbers. It must be a
   public URL, and the listing must disclose what you collect and why.
-- **Name and branding.** "Crunchy" plus a Crunchyroll-shaped logo invites both
-  a Web Store rejection and a trademark complaint from Sony. A neutral name
-  ("Watch Party for Anime", "Sync Party") is the safer listing. Nothing stops
-  you saying "works with Crunchyroll" in the description.
+- **Name and branding.** The name is deliberately neutral — no streaming
+  service's trademark appears in it. Keep it that way in the listing, the icon
+  and the screenshots, and say "works with Crunchyroll" in the description
+  rather than in the title. Carry the "not affiliated" line into the listing.
+- **Lead with what's different.** Playback sync alone is table stakes; several
+  free extensions already do it. The listing should open with webcam, floating
+  reactions, GIFs and navigation sync — the things the free ones lack.
 - **Single purpose** — the listing should describe one job: synced watching.
 - **Justify each permission** in the review notes; `storage` is for the login
   token, host permissions for the sync endpoint and GIF search.

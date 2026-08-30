@@ -1,4 +1,4 @@
-// Crunchy Party — API + room relay.
+// Otaku Sync — API + room relay.
 //
 //   POST /auth/otp/start    { phone }                 -> { ok }
 //   POST /auth/otp/verify   { phone, code }           -> { token, me }
@@ -20,9 +20,9 @@ const jwt = require("jsonwebtoken");
 const http = require("http");
 const { WebSocketServer } = require("ws");
 
-const { q, now, findOrCreateUser, entitlement } = require("./db");
-const { sendOtp } = require("./sms");
+const { q, now, entitlement, deviceOk } = require("./db");
 const billing = require("./billing");
+const { router: authRouter, publicUser, ipOf } = require("./auth");
 
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -67,27 +67,6 @@ setInterval(() => {
 }, 600000).unref();
 
 // E.164, e.g. +919876543210. Keeps international users working.
-function normalisePhone(raw) {
-  const s = String(raw || "").replace(/[^\d+]/g, "");
-  if (!/^\+[1-9]\d{7,14}$/.test(s)) return null;
-  return s;
-}
-
-const hashCode = (phone, code) =>
-  crypto.createHmac("sha256", JWT_SECRET).update(`${phone}:${code}`).digest("hex");
-
-function publicUser(user) {
-  const ent = entitlement(user);
-  return {
-    phone: user.phone,
-    status: ent.reason,
-    active: ent.active,
-    until: ent.until || null,
-    sub_status: user.sub_status || null,
-    support_whatsapp: process.env.SUPPORT_WHATSAPP || null,
-  };
-}
-
 function auth(req, res, next) {
   const h = req.get("Authorization") || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : null;
@@ -96,73 +75,38 @@ function auth(req, res, next) {
     const payload = jwt.verify(token, JWT_SECRET);
     const user = q.userById.get(payload.uid);
     if (!user) return res.status(401).json({ error: "no-user" });
+    // A revoked device must stop working immediately, even with a valid token.
+    if (payload.did && !payload.pending && !deviceOk(user.id, payload.did)) {
+      return res.status(401).json({ error: "device-revoked" });
+    }
     req.user = user;
+    req.deviceId = payload.did || null;
     next();
   } catch (_) {
     res.status(401).json({ error: "bad-token" });
   }
 }
 
-// --------------------------------------------------------------------- auth
+// Policy pages (privacy, terms, refunds) — the hosted sign-in page links to
+// these, and Razorpay/Chrome Web Store need them publicly reachable.
+app.use("/party", express.static(require("path").join(__dirname, "public"), { maxAge: "1h" }));
 
-app.post("/auth/otp/start", async (req, res) => {
-  const phone = normalisePhone(req.body && req.body.phone);
-  if (!phone) return res.status(400).json({ error: "bad-phone" });
-
-  const ip = req.ip || "?";
-  if (!rateLimit(`otp:ip:${ip}`, 20, 3600000)) return res.status(429).json({ error: "rate" });
-  if (!rateLimit(`otp:ph:${phone}`, 5, 3600000)) return res.status(429).json({ error: "rate" });
-
-  const code = String(crypto.randomInt(100000, 1000000));
-  q.upsertOtp.run({
-    phone,
-    code_hash: hashCode(phone, code),
-    expires_at: now() + 5 * 60000,
-    sent_at: now(),
-  });
-
-  try {
-    const out = await sendOtp(phone, code);
-    res.json({ ok: true, dev: !!out.dev });
-  } catch (e) {
-    console.error("otp send failed:", e.message);
-    res.status(502).json({ error: "sms-failed" });
-  }
-});
-
-app.post("/auth/otp/verify", (req, res) => {
-  const phone = normalisePhone(req.body && req.body.phone);
-  const code = String((req.body && req.body.code) || "").trim();
-  if (!phone || !/^\d{6}$/.test(code)) return res.status(400).json({ error: "bad-input" });
-
-  const row = q.getOtp.get(phone);
-  if (!row) return res.status(400).json({ error: "no-otp" });
-  if (row.expires_at < now()) {
-    q.clearOtp.run(phone);
-    return res.status(400).json({ error: "expired" });
-  }
-  if (row.attempts >= 5) return res.status(429).json({ error: "too-many" });
-
-  const given = Buffer.from(hashCode(phone, code));
-  const want = Buffer.from(row.code_hash);
-  const ok = given.length === want.length && crypto.timingSafeEqual(given, want);
-  if (!ok) {
-    q.bumpOtpAttempts.run(phone);
-    return res.status(400).json({ error: "wrong-code" });
-  }
-
-  q.clearOtp.run(phone);
-  const user = findOrCreateUser(phone);
-  const token = jwt.sign({ uid: user.id }, JWT_SECRET, { expiresIn: "180d" });
-  res.json({ token, me: publicUser(user) });
-});
+// Sign-in (Google, Facebook, email+password) lives in auth.js
+app.use(authRouter);
 
 app.get("/me", auth, (req, res) => res.json({ me: publicUser(req.user) }));
 
 // ------------------------------------------------------------------ billing
 
 app.post("/billing/subscribe", auth, async (req, res) => {
-  if (!process.env.RAZORPAY_PLAN_ID) return res.status(503).json({ error: "billing-off" });
+  if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+    console.error("subscribe: RAZORPAY_KEY_ID/SECRET missing in .env");
+    return res.status(503).json({ error: "billing-off" });
+  }
+  if (!process.env.RAZORPAY_PLAN_ID) {
+    console.error("subscribe: RAZORPAY_PLAN_ID missing in .env — create a monthly INR 5 plan first");
+    return res.status(503).json({ error: "billing-off" });
+  }
   try {
     const sub = await billing.createSubscription(req.user);
     q.setSub.run(sub.id, sub.status, req.user.id);
@@ -308,17 +252,28 @@ server.on("upgrade", (req, socket, head) => {
   if (url.pathname !== "/ws") return socket.destroy();
 
   const token = url.searchParams.get("token") || "";
-  const code = url.searchParams.get("room") || "";
-  if (!/^\d{6}$/.test(code)) return socket.destroy();
+  const code = String(url.searchParams.get("room") || "").toUpperCase();
+  if (!/^[A-Z0-9]{6}$/.test(code)) return socket.destroy();
 
   let user;
+  let deviceId = null;
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     user = q.userById.get(payload.uid);
+    deviceId = payload.did || null;
   } catch (_) {
     return socket.destroy();
   }
   if (!user) return socket.destroy();
+
+  // Signed out from another device: cut this session off immediately.
+  if (deviceId && !deviceOk(user.id, deviceId)) {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      send(ws, { t: "denied", reason: "device-revoked" });
+      setTimeout(() => ws.close(4003, "device-revoked"), 250);
+    });
+    return;
+  }
 
   const ent = entitlement(user);
   if (!ent.active) {
@@ -332,6 +287,7 @@ server.on("upgrade", (req, socket, head) => {
 
   wss.handleUpgrade(req, socket, head, (ws) => {
     ws.userId = user.id;
+    ws.deviceId = deviceId;
     ws.room = code;
     ws.alive = true;
     // Small control messages must go out immediately, not be held for
@@ -412,4 +368,4 @@ setInterval(() => {
   }
 }, 300000).unref();
 
-server.listen(PORT, () => console.log(`Crunchy Party server on :${PORT}`));
+server.listen(PORT, () => console.log(`Otaku Sync server on :${PORT}`));

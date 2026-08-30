@@ -18,28 +18,37 @@ config does: change one DNS record and every installed extension follows.
 ## 2. Deploy to RackNerd
 
 ```bash
-scp -r server root@<your-ip>:/root/cp-server
+scp -r server root@<your-ip>:/root/otaku-server
 ssh root@<your-ip>
-cd /root/cp-server
-bash deploy.sh api.yourdomain.com
+cd /root/otaku-server
+bash deploy.sh api.yourdomain.com admin.yourdomain.com
 ```
 
-The script installs Node 20, Caddy, and the service; generates a JWT secret;
-opens ports 22/80/443; obtains a TLS certificate; and health-checks itself.
-It prints your API and WS URLs when it finishes.
+The second hostname is optional. Given one, the admin panel gets its own HTTPS
+address; omit it and the panel stays on localhost, reached through a tunnel
+(`ssh -L 3310:127.0.0.1:3310 root@<your-ip>`, then http://127.0.0.1:3310).
+
+The script installs Node 20 and Caddy, sets up **two** services — `otaku-sync`
+(API + room relay) and `otaku-admin` (database panel) — generates the JWT
+secret, sets `PUBLIC_URL`, obtains TLS certificates, and health-checks itself.
+Ports 8080 and 3310 stay closed to the internet; only Caddy reaches them.
+
+On first run it generates a strong admin password and prints it **once** —
+save it then. It is stored in `/opt/otaku-sync/server/.env`.
 
 Verify:
 
 ```bash
 curl https://api.yourdomain.com/health     # {"ok":true,...}
-journalctl -u crunchy-party -f
+journalctl -u otaku-sync -f
+journalctl -u otaku-admin -f
 ```
 
 ## 3. Secrets
 
 ```bash
-nano /opt/crunchy-party/server/.env
-systemctl restart crunchy-party
+nano /opt/otaku-sync/server/.env
+systemctl restart otaku-sync
 ```
 
 Fill in `RAZORPAY_KEY_SECRET`, `RAZORPAY_PLAN_ID`, `RAZORPAY_WEBHOOK_SECRET`.
@@ -100,7 +109,7 @@ Razorpay activation and the Chrome Web Store listing.
 
 1. Load `extension/` unpacked in Chrome.
 2. Open an episode → panel appears → sign in with your phone → code shows in
-   `journalctl -u crunchy-party -f`.
+   `journalctl -u otaku-sync -f`.
 3. Start a party, open the invite link in a second browser profile signed in
    with a different number.
 4. Pause on one side; confirm the other pauses within a second.
@@ -110,14 +119,14 @@ Razorpay activation and the Chrome Web Store listing.
 ## Operating notes
 
 ```bash
-systemctl status crunchy-party         # is it up
-journalctl -u crunchy-party -f         # live logs
-systemctl restart crunchy-party        # after .env changes
-sqlite3 /opt/crunchy-party/server/data.sqlite "SELECT COUNT(*) FROM users;"
+systemctl status otaku-sync         # is it up
+journalctl -u otaku-sync -f         # live logs
+systemctl restart otaku-sync        # after .env changes
+sqlite3 /opt/otaku-sync/server/data.sqlite "SELECT COUNT(*) FROM users;"
 ```
 
 Back the database up on a cron — it holds every user and entitlement:
 
 ```bash
-0 3 * * * sqlite3 /opt/crunchy-party/server/data.sqlite ".backup '/root/cp-$(date +\%F).sqlite'"
+0 3 * * * sqlite3 /opt/otaku-sync/server/data.sqlite ".backup '/root/cp-$(date +\%F).sqlite'"
 ```
