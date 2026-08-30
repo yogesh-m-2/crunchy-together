@@ -13,7 +13,7 @@
     ws: "wss://api.YOURDOMAIN.com/ws",
     fallbacks: [],
     support_whatsapp: SUPPORT_WHATSAPP,
-    price_label: "₹5 / month",
+    price_label: "₹50 / month",
     trial_days: 7,
     notice: null,
     maintenance: false,
@@ -133,6 +133,18 @@
   };
 
   NET.devices = () => api({ type: "get", path: "/devices", auth: true });
+
+  // Anonymous usage counters — numbers only, batched, never message content.
+  const counters = {};
+  NET.count = function (name, n) {
+    counters[name] = (counters[name] || 0) + (n || 1);
+  };
+  NET.flushCounts = function () {
+    const events = { ...counters };
+    if (!Object.keys(events).length) return Promise.resolve();
+    for (const k of Object.keys(counters)) delete counters[k];
+    return api({ type: "post", path: "/stats", body: { events }, auth: true });
+  };
 
   NET.logout = async function () {
     // Tell the server first so the device slot is freed, then drop the token
@@ -306,6 +318,7 @@
 
   let pc = null;
   let camSender = null;
+  let micSender = null;
   let makingOffer = false;
   let ignoreOffer = false;
 
@@ -389,6 +402,21 @@
     }
   };
 
+  // Voice chat rides the same peer connection as video.
+  NET.setLocalMic = async function (stream) {
+    const p = ensurePc();
+    if (micSender) {
+      try {
+        p.removeTrack(micSender);
+      } catch (_) {}
+      micSender = null;
+    }
+    if (stream) {
+      const track = stream.getAudioTracks()[0];
+      if (track) micSender = p.addTrack(track, stream);
+    }
+  };
+
   // Create the connection early so incoming tracks are never missed.
   NET.primeMedia = async function () {
     ensurePc();
@@ -400,6 +428,7 @@
     } catch (_) {}
     pc = null;
     camSender = null;
+    micSender = null;
     makingOffer = false;
     ignoreOffer = false;
     NET.onRemoteStream && NET.onRemoteStream(null);

@@ -76,6 +76,13 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   seen_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS events (
+  day   TEXT NOT NULL,
+  name  TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_sub ON users(sub_id);
 CREATE INDEX IF NOT EXISTS idx_devices_user ON devices(user_id);
 `);
@@ -166,6 +173,15 @@ const q = {
   getOtp: db.prepare("SELECT * FROM otps WHERE ident = ?"),
   bumpOtpAttempts: db.prepare("UPDATE otps SET attempts = attempts + 1 WHERE ident = ?"),
   clearOtp: db.prepare("DELETE FROM otps WHERE ident = ?"),
+
+  bumpEvent: db.prepare(`
+    INSERT INTO events (day, name, count) VALUES (@day, @name, @count)
+    ON CONFLICT(day, name) DO UPDATE SET count = count + @count
+  `),
+  eventsSince: db.prepare("SELECT * FROM events WHERE day >= ? ORDER BY day DESC, count DESC"),
+  eventTotals: db.prepare(
+    "SELECT name, SUM(count) AS total FROM events WHERE day >= ? GROUP BY name ORDER BY total DESC"
+  ),
 
   seenEvent: db.prepare("SELECT id FROM webhook_events WHERE id = ?"),
   markEvent: db.prepare("INSERT OR IGNORE INTO webhook_events (id, seen_at) VALUES (?, ?)"),
@@ -284,9 +300,13 @@ function isGuest(user) {
 }
 
 // The single source of truth for "may this user use the product right now".
+const billingOn = () => String(process.env.BILLING_ENABLED || "false") === "true";
+
 function entitlement(user) {
   const t = now();
   if (!user || user.blocked) return { active: false, reason: "blocked" };
+  // Free mode: no trials, no paywall, nothing expires.
+  if (!billingOn()) return { active: true, reason: "free" };
   if (user.paid_until && user.paid_until > t) {
     return { active: true, reason: "subscribed", until: user.paid_until };
   }
@@ -294,6 +314,17 @@ function entitlement(user) {
     return { active: true, reason: "trial", until: user.trial_ends_at };
   }
   return { active: false, reason: "expired", until: user.trial_ends_at };
+}
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function track(name, count = 1) {
+  if (!name || !Number.isFinite(count) || count <= 0) return;
+  try {
+    q.bumpEvent.run({ day: today(), name: String(name).slice(0, 40), count: Math.min(count, 100000) });
+  } catch (_) {}
 }
 
 // ------------------------------------------------------------------ devices
@@ -340,6 +371,8 @@ module.exports = {
   attachIdentity,
   isGuest,
   entitlement,
+  billingOn,
+  track,
   registerDevice,
   deviceOk,
   trialLengthFor,

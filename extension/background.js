@@ -14,7 +14,7 @@ const BUILTIN_CONFIG = {
   ws: "wss://api.YOURDOMAIN.com/ws",
   fallbacks: [],
   support_whatsapp: "+918660095124",
-  price_label: "₹5 / month",
+  price_label: "₹50 / month",
   trial_days: 7,
   notice: null,
   maintenance: false,

@@ -29,7 +29,9 @@
     lastNavAt: 0,
     lastFollowAt: 0,
     camStream: null,
+    micStream: null,
     remoteCam: null,
+    remoteAudio: null,
     partnerCamOn: false,
   };
 
@@ -668,12 +670,12 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       return render(
         el("p", { class: "note", text: "Your free trial is over. Sign in to keep watching together — it also keeps your subscription safe if you change browsers." }),
         inBtn,
-        el("p", { class: "note", text: `${NET.config.price_label || "₹5 / month"}, cancel any time.` }),
+        el("p", { class: "note", text: `${NET.config.price_label || "₹50 / month"}, cancel any time.` }),
         supportButton("Hi, I need help subscribing to Otaku Sync.")
       );
     }
 
-    const btn = el("button", { class: "act primary", text: `Subscribe — ${NET.config.price_label || "₹5 / month"}` });
+    const btn = el("button", { class: "act primary", text: `Subscribe — ${NET.config.price_label || "₹50 / month"}` });
     btn.addEventListener("click", () => startCheckout(btn));
 
     render(
@@ -823,7 +825,9 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       el("p", { class: "note", text: "Or join with a code:" }),
       el("div", { class: "row" }, [codeField, joinBtn]),
     ];
-    if (ent.status === "trial" && ent.until) {
+    if (ent.status === "free") {
+      nodes.push(el("p", { class: "note", text: "Free while in beta — no payment, no limits." }));
+    } else if (ent.status === "trial" && ent.until) {
       // Let people pay before the trial runs out if they want to.
       const payBtn = el("button", { class: "act mini", text: "Subscribe" });
       payBtn.addEventListener("click", () => startCheckout(payBtn));
@@ -914,6 +918,7 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       const text = input.value.trim();
       input.value = "";
       wire({ t: "msg", text });
+      NET.count("chat_sent");
       addLine(state.name, text, "me");
     });
 
@@ -927,6 +932,7 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
           text: emoji,
           onclick: () => {
             wire({ t: "react", e: emoji });
+            NET.count("reaction_sent");
             reactAll(emoji);
           },
         })
@@ -935,6 +941,9 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
 
     const camBtn = el("button", { class: "act", text: state.camStream ? "Cam off" : "Cam on" });
     camBtn.addEventListener("click", () => toggleCam(camBtn));
+
+    const micBtn = el("button", { class: "act", text: state.micStream ? "Mic off" : "Mic on" });
+    micBtn.addEventListener("click", () => toggleMic(micBtn));
 
     const drawer = el("div", { class: "drawer" });
     const emojiBtn = el("button", { class: "act", text: "😊 Emoji" });
@@ -959,7 +968,8 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       el("div", { class: "pickrow" }, [emojiBtn, gifBtn]),
       drawer,
       input,
-      el("div", { class: "row" }, [camBtn, el("button", { class: "act", text: "Leave", onclick: leaveRoom })])
+      el("div", { class: "row" }, [camBtn, micBtn]),
+      el("button", { class: "act", text: "Leave party", onclick: leaveRoom })
     );
 
     screenRoom.log = log;
@@ -1060,6 +1070,7 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
           img.addEventListener("click", () => {
             if (!state.linked) return;
             wire({ t: "gif", url: g.full });
+            NET.count("gif_sent");
             gifAll(g.full);
           });
           return img;
@@ -1133,7 +1144,10 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     // Built generically from a list, so extra participants slot straight in.
     const feeds = [];
     if (state.camStream) feeds.push({ id: "me", name: "You", stream: state.camStream, mirror: true });
-    if (state.remoteCam && state.partnerCamOn) {
+    const remoteHasVideo =
+      state.remoteCam &&
+      state.remoteCam.getVideoTracks().some((t) => t.readyState === "live");
+    if (remoteHasVideo && state.partnerCamOn) {
       feeds.push({ id: "them", name: state.partner, stream: state.remoteCam, mirror: false });
     }
 
@@ -1318,13 +1332,63 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       return;
     }
     if (btn) btn.textContent = "Cam off";
+    NET.count("cam_on");
     refreshCams();
     wire({ t: "cam", on: true });
     await NET.setLocalCam(state.camStream);
   }
 
+  async function toggleMic(btn) {
+    if (state.micStream) {
+      try {
+        state.micStream.getTracks().forEach((t) => t.stop());
+      } catch (_) {}
+      state.micStream = null;
+      if (btn) btn.textContent = "Mic on";
+      wire({ t: "mic", on: false });
+      await NET.setLocalMic(null);
+      return;
+    }
+    try {
+      state.micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false,
+      });
+    } catch (_) {
+      addLine("", "Microphone blocked. Allow mic access for crunchyroll.com in the address bar.", "sys");
+      return;
+    }
+    if (btn) btn.textContent = "Mic off";
+    NET.count("mic_on");
+    wire({ t: "mic", on: true });
+    await NET.setLocalMic(state.micStream);
+    addLine("", "Voice chat on. Headphones recommended, or they'll hear the show twice.", "sys");
+  }
+
+  // Remote audio needs its own element — a cam tile only exists when video is
+  // actually flowing, but voice should work with cameras off.
+  function playRemoteAudio(stream) {
+    if (!stream || !stream.getAudioTracks().length) {
+      if (state.remoteAudio) {
+        state.remoteAudio.srcObject = null;
+        state.remoteAudio.remove();
+        state.remoteAudio = null;
+      }
+      return;
+    }
+    if (!state.remoteAudio) {
+      state.remoteAudio = el("audio", { autoplay: "" });
+      state.remoteAudio.style.display = "none";
+      shadow.appendChild(state.remoteAudio);
+    }
+    if (state.remoteAudio.srcObject !== stream) state.remoteAudio.srcObject = stream;
+    const p = state.remoteAudio.play();
+    if (p && p.catch) p.catch(() => {});
+  }
+
   NET.onRemoteStream = (stream) => {
     state.remoteCam = stream;
+    playRemoteAudio(stream);
     refreshCams();
   };
 
@@ -1413,6 +1477,10 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     if (msg.t === "cam") {
       state.partnerCamOn = !!msg.on;
       refreshCams();
+      return;
+    }
+    if (msg.t === "mic") {
+      addLine("", `${state.partner} turned their mic ${msg.on ? "on" : "off"}.`, "sys");
       return;
     }
     if (msg.t === "init") {
@@ -1518,6 +1586,12 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
   function leaveRoom() {
     state.leaving = true;
     closeAllPopouts();
+    NET.flushCounts();
+    try {
+      state.micStream && state.micStream.getTracks().forEach((t) => t.stop());
+    } catch (_) {}
+    state.micStream = null;
+    playRemoteAudio(null);
     try {
       state.camStream && state.camStream.getTracks().forEach((t) => t.stop());
     } catch (_) {}
@@ -1786,6 +1860,13 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       if (!res.me.active && !state.linked) screenExpired();
     }
   }, 15 * 60000);
+
+  // Counters are batched; push them out periodically and on the way out, so
+  // closing the tab mid-party doesn't lose the session's numbers.
+  setInterval(() => {
+    if (!deadShown) NET.flushCounts();
+  }, 120000);
+  window.addEventListener("pagehide", () => NET.flushCounts());
 
   boot();
 })();

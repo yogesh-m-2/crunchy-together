@@ -20,7 +20,7 @@ const jwt = require("jsonwebtoken");
 const http = require("http");
 const { WebSocketServer } = require("ws");
 
-const { q, now, entitlement, deviceOk } = require("./db");
+const { q, now, entitlement, deviceOk, track, billingOn } = require("./db");
 const billing = require("./billing");
 const { router: authRouter, publicUser, ipOf } = require("./auth");
 
@@ -190,7 +190,24 @@ app.post("/billing/webhook", async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/health", (_req, res) => res.json({ ok: true, t: now() }));
+// Anonymous usage counters from the extension. Numbers only — no chat text,
+// no episode titles, nothing identifying.
+const ALLOWED_EVENTS = new Set([
+  "party_started", "party_joined", "chat_sent", "gif_sent", "reaction_sent",
+  "cam_on", "mic_on", "fullscreen", "episode_followed", "minutes_watched",
+]);
+
+app.post("/stats", auth, (req, res) => {
+  const ev = (req.body && req.body.events) || {};
+  for (const [name, count] of Object.entries(ev)) {
+    if (!ALLOWED_EVENTS.has(name)) continue;
+    const n = parseInt(count, 10);
+    if (Number.isFinite(n) && n > 0) track(name, Math.min(n, 10000));
+  }
+  res.json({ ok: true });
+});
+
+app.get("/health", (_req, res) => res.json({ ok: true, t: now(), billing: billingOn() }));
 
 // ------------------------------------------------------------ rooms over ws
 
@@ -308,6 +325,7 @@ wss.on("connection", (ws) => {
   }
   ws.role = peers.size === 0 ? "host" : "guest";
   peers.add(ws);
+  track(ws.role === "host" ? "party_started" : "party_joined");
 
   send(ws, { t: "joined", role: ws.role, peers: peers.size });
   for (const p of peers) if (p !== ws) send(p, { t: "peer-joined" });

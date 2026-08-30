@@ -46,7 +46,7 @@ your bandwidth. Webcam video never touches the server.
 | --- | --- |
 | PeerJS public broker | Your own WebSocket relay |
 | Anonymous | Phone + OTP, 180-day token |
-| Free | 7-day trial, then ₹5/month via Razorpay |
+| Free | 7-day trial, then ₹50/month via Razorpay |
 | Fixed endpoints | Fetched from GitHub, cached, with fallbacks |
 | — | WhatsApp support surfaced on every failure screen |
 
@@ -74,7 +74,7 @@ auto-follow.
 
 ## Economics worth checking before launch
 
-At ₹5/month, per paying user per month:
+At ₹50/month, per paying user per month:
 
 | Item | Rough cost |
 | --- | --- |
@@ -85,6 +85,6 @@ At ₹5/month, per paying user per month:
 Recurring ₹5 mandates also sit near the awkward end of what card networks and
 UPI AutoPay like to process, and each renewal carries the fixed fee again.
 Two adjustments that keep the price friendly but the maths comfortable:
-charge annually (₹49–99/year, one fee instead of twelve), or keep ₹5/month but
+charge annually (₹49–99/year, one fee instead of twelve), or keep ₹50/month but
 require a longer first commitment. Worth deciding before you have paying users,
 since changing a live price is much harder than setting it.
