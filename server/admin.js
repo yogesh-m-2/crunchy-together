@@ -456,9 +456,31 @@ function toast(msg, bad) {
   t._h = setTimeout(() => (t.className = "toast"), 2200);
 }
 
+// Any API call can come back 401 once the session expires. Send the user to
+// the login page rather than leaving a blank screen.
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (res.status === 401) {
+    window.location = "/login";
+    throw new Error("session expired");
+  }
+  if (!res.ok) throw new Error(path + " -> HTTP " + res.status);
+  return res.json();
+}
+
 async function loadTables() {
-  const r = await fetch("/api/tables").then((r) => r.json());
   const nav = $("#nav");
+  let r;
+  try {
+    r = await api("/api/tables");
+  } catch (e) {
+    // Say what went wrong instead of showing an empty sidebar.
+    nav.innerHTML = '<div style="padding:10px;color:#ff9d9d;font-size:12px">' +
+      "Couldn't load tables.<br>" + String(e.message || e) +
+      '<br><br><a href="/login" style="color:#ffb03b">Sign in again</a></div>';
+    console.error("loadTables failed:", e);
+    return;
+  }
   nav.innerHTML = "";
 
   for (const v of [["usage", "Usage"], ["system", "System"]]) {
@@ -493,7 +515,12 @@ function paint() {
 async function loadRows() {
   if (!current) return;
   const q = encodeURIComponent($("#q").value.trim());
-  const r = await fetch("/api/rows?table=" + encodeURIComponent(current) + "&q=" + q + "&limit=" + limit + "&offset=" + offset).then((r) => r.json());
+  let r;
+  try {
+    r = await api("/api/rows?table=" + encodeURIComponent(current) + "&q=" + q + "&limit=" + limit + "&offset=" + offset);
+  } catch (e) {
+    return toast(String(e.message || e), true);
+  }
   if (r.error) return toast(r.error, true);
 
   $("#meta").textContent = r.total + " rows · showing " + (r.total ? offset + 1 : 0) + "–" + Math.min(offset + limit, r.total);
@@ -613,7 +640,12 @@ function showView() {
 }
 
 async function loadUsage() {
-  const r = await fetch("/api/usage?days=30").then((r) => r.json());
+  let r;
+  try {
+    r = await api("/api/usage?days=30");
+  } catch (e) {
+    return toast(String(e.message || e), true);
+  }
   if (r.error) return toast(r.error, true);
   const s = r.summary;
 
@@ -631,7 +663,7 @@ async function loadUsage() {
   } else {
     const max = Math.max.apply(null, r.totals.map((t) => t.total));
     h += '<table style="max-width:640px">';
-    h += "<tr><th>Event</th><th>Total</th><th style=\"width:55%\"></th></tr>";
+    h += "<tr><th>Event</th><th>Total</th><th style='width:55%'></th></tr>";
     for (const t of r.totals) {
       const w = Math.round((t.total / max) * 100);
       h += "<tr><td>" + t.name + "</td><td>" + t.total + "</td>" +
@@ -644,10 +676,10 @@ async function loadUsage() {
   for (const d of r.daily) { (byDay[d.day] = byDay[d.day] || []).push(d); }
   const days = Object.keys(byDay).sort().reverse().slice(0, 14);
   if (days.length) {
-    h += "<h2>By day</h2><table style=\"max-width:640px\"><tr><th>Day</th><th>Activity</th></tr>";
+    h += "<h2>By day</h2><table style='max-width:640px'><tr><th>Day</th><th>Activity</th></tr>";
     for (const d of days) {
       const parts = byDay[d].map((x) => x.name + " " + x.count).join("  ·  ");
-      h += "<tr><td>" + d + "</td><td style=\"white-space:normal\">" + parts + "</td></tr>";
+      h += "<tr><td>" + d + "</td><td style='white-space:normal'>" + parts + "</td></tr>";
     }
     h += "</table>";
   }
@@ -655,7 +687,12 @@ async function loadUsage() {
 }
 
 async function loadSystem() {
-  const r = await fetch("/api/system").then((r) => r.json());
+  let r;
+  try {
+    r = await api("/api/system");
+  } catch (e) {
+    return toast(String(e.message || e), true);
+  }
   if (r.error) return toast(r.error, true);
 
   let h = '<h2>Server</h2><div class="cards">';
@@ -672,7 +709,7 @@ async function loadSystem() {
   h += card("Database", fmtBytes(r.database.bytes), "data.sqlite + WAL");
   h += "</div>";
 
-  h += "<h2>Rows per table</h2><table style=\"max-width:420px\"><tr><th>Table</th><th>Rows</th></tr>";
+  h += "<h2>Rows per table</h2><table style='max-width:420px'><tr><th>Table</th><th>Rows</th></tr>";
   for (const k of Object.keys(r.database.rows)) {
     h += "<tr><td>" + k + "</td><td>" + r.database.rows[k] + "</td></tr>";
   }
