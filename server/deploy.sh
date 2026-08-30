@@ -209,13 +209,19 @@ if ! curl -fsS "https://$API_DOMAIN/health"; then
 fi
 echo
 
+if [[ -n "$ADMIN_DOMAIN" ]]; then
+  ADMIN_LINE="https://$ADMIN_DOMAIN"
+else
+  ADMIN_LINE="http://127.0.0.1:3310  (ssh -L 3310:127.0.0.1:3310 root@$MYIP)"
+fi
+
 cat <<DONE
 
 Done.
 
   API     https://$API_DOMAIN
   WS      wss://$API_DOMAIN/ws
-  Admin   ${ADMIN_DOMAIN:+https://$ADMIN_DOMAIN}${ADMIN_DOMAIN:-"http://127.0.0.1:3310 (via: ssh -L 3310:127.0.0.1:3310 root@$MYIP)"}
+  Admin   $ADMIN_LINE
 
   Logs    journalctl -u $SERVICE -f
           journalctl -u $ADMIN_SERVICE -f
