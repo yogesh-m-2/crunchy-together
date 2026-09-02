@@ -497,7 +497,7 @@ async function loadTables() {
   for (const t of r.tables) {
     const b = document.createElement("button");
     b.innerHTML = t.name + '<span class="n">' + t.count + "</span>";
-    b.onclick = () => { current = t.name; offset = 0; $("#q").value = ""; loadRows(); paint(); };
+    b.onclick = () => { current = t.name; offset = 0; $("#q").value = ""; paint(); showView(); };
     b.dataset.name = t.name;
     nav.appendChild(b);
   }
