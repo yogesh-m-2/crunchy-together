@@ -21,6 +21,10 @@
     local: { paused: true, time: 0 },
     lastApplied: null,
     lastActAt: 0,
+    ready: true,           // our player has enough buffered to play through
+    buffering: false,      // our player has stalled
+    partnerBuffering: false,
+    autoPaused: false,     // paused by us to wait for the other side
     lastTickAt: 0,
     lastSyncSent: 0,
     holdSendUntil: 0,
@@ -1399,7 +1403,22 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
   const pendingActs = new Map();
   const seqOf = (id) => parseInt(String(id || "").split("-").pop(), 10) || 0;
 
+  let actWindow = [];
+  let stormNoted = 0;
+
   function sendAct(action, paused, time) {
+    // Guard against feedback loops: no more than 6 actions in 5 seconds.
+    const now = Date.now();
+    actWindow = actWindow.filter((t) => now - t < 5000);
+    if (actWindow.length >= 6) {
+      if (now - stormNoted > 15000) {
+        stormNoted = now;
+        addLine("", "Ignoring rapid play/pause changes for a moment.", "sys");
+      }
+      return;
+    }
+    actWindow.push(now);
+
     for (const [oldId, entry] of pendingActs) {
       clearTimeout(entry.timer);
       pendingActs.delete(oldId);
@@ -1441,9 +1460,35 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     toPlayer({ type: "apply", paused: msg.paused, time: msg.time, tolerance });
   }
 
+  // Pause/resume without touching position. Seeking a stalled player throws
+  // away the buffer it is building, which is what kept it spinning.
+  function setPausedOnly(paused) {
+    state.holdSendUntil = Date.now() + 1200;
+    state.lastApplied = { paused, time: undefined, at: Date.now() };
+    toPlayer({ type: "apply", paused });
+  }
+
+  function waitForPartner() {
+    if (state.autoPaused || state.local.paused) return;
+    state.autoPaused = true;
+    setPausedOnly(true);
+    addLine("", `Waiting for ${state.partner} to buffer…`, "sys");
+  }
+
+  function resumeAfterWait() {
+    if (!state.autoPaused) return;
+    state.autoPaused = false;
+    if (state.buffering) return; // we are the ones still catching up
+    setPausedOnly(false);
+    addLine("", "Both ready — resuming.", "sys");
+  }
+
   function verifyAct(msg, attempt) {
     if (!NET.connected()) return;
     if (seqOf(msg.id) < latestRemoteSeq) return wire({ t: "ack", id: msg.id });
+    // Buffering is not a failure — acknowledge so they don't retry into a
+    // player that is already struggling.
+    if (state.buffering || !state.ready) return wire({ t: "ack", id: msg.id });
     const fresh = Date.now() - state.lastTickAt < 2500;
     const timeOk =
       typeof msg.time !== "number" || Math.abs(state.local.time - msg.time) < (msg.paused ? 3 : 8);
@@ -1472,6 +1517,12 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     if (msg.t === "gif") return gifAll(msg.url);
     if (msg.t === "react") {
       if (REACTS.includes(msg.e)) reactAll(msg.e);
+      return;
+    }
+    if (msg.t === "buf") {
+      state.partnerBuffering = !!msg.on;
+      if (state.partnerBuffering) waitForPartner();
+      else resumeAfterWait();
       return;
     }
     if (msg.t === "cam") {
@@ -1521,11 +1572,18 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       applyRemote(msg, 0.4);
       if (msg.id) setTimeout(() => verifyAct(msg, 0), 1000);
       const verb = msg.action === "seeked" ? "jumped to" : msg.paused ? "paused at" : "resumed at";
-      addLine("", `${state.partner} ${verb} ${clock(msg.time)}`, "sys");
+      const line = `${state.partner} ${verb} ${clock(msg.time)}`;
+      if (line !== onWire.lastLine || Date.now() - (onWire.lastLineAt || 0) > 3000) {
+        onWire.lastLine = line;
+        onWire.lastLineAt = Date.now();
+        addLine("", line, "sys");
+      }
       return;
     }
     if (msg.t === "sync") {
       if (msg.ep && state.episode && msg.ep !== state.episode) return;
+      // Never seek while either side is still filling its buffer.
+      if (state.buffering || !state.ready || state.partnerBuffering) return;
       if (Date.now() - state.lastActAt < 3000) return;
       applyRemote(msg, 2.0);
     }
@@ -1685,6 +1743,8 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       if (u.hostname !== "www.crunchyroll.com") return;
       state.lastFollowAt = Date.now();
       u.searchParams.set(PARAM, state.code);
+      NET.count("episode_followed");
+      NET.flushCounts(); // we are about to navigate away
       addLine("", `Following ${state.partner}…`, "sys");
       setTimeout(() => location.assign(u.toString()), 1200);
     } catch (_) {}
@@ -1714,9 +1774,23 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
 
     if (msg.type === "tick") {
       state.lastTickAt = Date.now();
+      // Ticks arrive about once a second. Count a minute of shared watching
+      // each time 60 of them land while linked and actually playing.
+      if (state.linked && !msg.paused) {
+        state.watchTicks = (state.watchTicks || 0) + 1;
+        if (state.watchTicks >= 60) {
+          state.watchTicks = 0;
+          NET.count("minutes_watched");
+        }
+      }
       state.local = { paused: msg.paused, time: msg.time };
+      if (typeof msg.ready === "boolean") state.ready = msg.ready;
       if (screenRoom.time) screenRoom.time.textContent = clock(msg.time);
-      if (state.linked && !msg.paused && Date.now() - state.lastSyncSent > 4000) {
+      // Only offer our position for drift correction when we are actually
+      // playing smoothly. A stalled player reporting a stale position would
+      // drag the other side backwards.
+      const healthy = state.ready && !state.buffering && !state.partnerBuffering;
+      if (state.linked && !msg.paused && healthy && Date.now() - state.lastSyncSent > 4000) {
         state.lastSyncSent = Date.now();
         wire({ t: "sync", paused: msg.paused, time: msg.time, ep: state.episode });
       }
@@ -1728,8 +1802,25 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       if (!state.linked) return;
       const a = state.lastApplied;
       const isEcho =
-        a && Date.now() - a.at < 1500 && msg.paused === a.paused && Math.abs(msg.time - a.time) < 2.5;
+        a &&
+        Date.now() - a.at < 1500 &&
+        msg.paused === a.paused &&
+        (typeof a.time !== "number" || Math.abs(msg.time - a.time) < 2.5);
       if (!isEcho) sendAct(msg.action, msg.paused, msg.time);
+      return;
+    }
+
+    if (msg.type === "buffering") {
+      state.buffering = !!msg.on;
+      if (state.linked) {
+        wire({ t: "buf", on: state.buffering });
+        if (state.buffering) NET.count("buffer_wait");
+      }
+      // We recovered and were only paused waiting on ourselves: carry on.
+      if (!state.buffering && state.autoPaused && !state.partnerBuffering) {
+        state.autoPaused = false;
+        setPausedOnly(false);
+      }
       return;
     }
 
@@ -1814,6 +1905,7 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
 
   document.addEventListener("fullscreenchange", () => {
     const fs = document.fullscreenElement;
+    if (fs && state.linked) NET.count("fullscreen");
     if (fs && fs !== host && fs.tagName !== "IFRAME" && fs.appendChild) {
       fs.appendChild(host);
       panel.classList.add("fsmode");

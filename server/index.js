@@ -195,6 +195,7 @@ app.post("/billing/webhook", async (req, res) => {
 const ALLOWED_EVENTS = new Set([
   "party_started", "party_joined", "chat_sent", "gif_sent", "reaction_sent",
   "cam_on", "mic_on", "fullscreen", "episode_followed", "minutes_watched",
+  "buffer_wait",
 ]);
 
 app.post("/stats", auth, (req, res) => {

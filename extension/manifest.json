@@ -1,29 +1,43 @@
 {
   "manifest_version": 3,
   "name": "Otaku Sync",
-  "version": "5.0.0",
-  "description": "Watch anime together in sync — shared play/pause/seek, webcam, chat, GIFs and floating reactions.",
-  "permissions": ["storage"],
+  "version": "5.2.1",
+  "description": "Watch anime together in sync \u2014 shared play/pause/seek, webcam, chat, GIFs and floating reactions.",
+  "permissions": [
+    "storage"
+  ],
   "host_permissions": [
     "https://www.crunchyroll.com/*",
     "https://static.crunchyroll.com/*",
     "https://raw.githubusercontent.com/*",
     "https://api.giphy.com/*",
     "https://*.giphy.com/*",
-    "https://api.yogeshmallidi.com/*",
-    "https://backup.yogeshmallidi.com/*"
+    "https://api.YOURDOMAIN.com/*",
+    "https://backup.YOURDOMAIN.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
     "default_title": "Otaku Sync",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png",
+      "48": "icon-48.png",
+      "128": "icon-128.png"
+    }
   },
   "content_scripts": [
     {
-      "matches": ["https://www.crunchyroll.com/*"],
-      "js": ["net.js", "emojis.js", "room.js"],
+      "matches": [
+        "https://www.crunchyroll.com/*"
+      ],
+      "js": [
+        "net.js",
+        "emojis.js",
+        "room.js"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -31,9 +45,17 @@
         "https://www.crunchyroll.com/*",
         "https://static.crunchyroll.com/*"
       ],
-      "js": ["player.js"],
+      "js": [
+        "player.js"
+      ],
       "all_frames": true,
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  }
 }
