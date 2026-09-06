@@ -331,6 +331,7 @@ wss.on("connection", (ws) => {
   for (const p of [...peers]) {
     if (p.deviceId && ws.deviceId && p.deviceId === ws.deviceId) {
       peers.delete(p);
+      console.log(`[ws] replacing stale socket for device=${String(ws.deviceId).slice(0, 8)} room=${ws.room}`);
       try {
         p.close(4008, "replaced");
       } catch (_) {}
@@ -344,6 +345,11 @@ wss.on("connection", (ws) => {
   ws.role = peers.size === 0 ? "host" : "guest";
   peers.add(ws);
   track(ws.role === "host" ? "party_started" : "party_joined");
+  ws.joinedAt = now();
+  console.log(
+    `[ws] join room=${ws.room} role=${ws.role} user=${ws.userId} ` +
+      `device=${String(ws.deviceId).slice(0, 8)} peers=${peers.size}`
+  );
 
   send(ws, { t: "joined", role: ws.role, peers: peers.size });
   for (const p of peers) if (p !== ws) send(p, { t: "peer-joined" });
@@ -362,11 +368,22 @@ wss.on("connection", (ws) => {
     relayRaw(ws, raw);
   });
 
-  ws.on("close", () => {
+  ws.on("close", (code, reasonBuf) => {
     const set = roomOf(ws.room);
     set.delete(ws);
+    const reason = reasonBuf ? reasonBuf.toString() : "";
+    const secs = Math.round((now() - (ws.joinedAt || now())) / 1000);
+    console.log(
+      `[ws] close room=${ws.room} role=${ws.role} user=${ws.userId} ` +
+        `device=${String(ws.deviceId).slice(0, 8)} code=${code}` +
+        `${reason ? ` reason=${reason}` : ""} after=${secs}s peers=${set.size}`
+    );
     for (const p of set) send(p, { t: "peer-left" });
     if (!set.size) rooms.delete(ws.room);
+  });
+
+  ws.on("error", (e) => {
+    console.log(`[ws] error room=${ws.room} device=${String(ws.deviceId).slice(0, 8)}: ${e.message}`);
   });
 });
 
@@ -374,6 +391,9 @@ wss.on("connection", (ws) => {
 setInterval(() => {
   for (const ws of wss.clients) {
     if (!ws.alive) {
+      console.log(
+        `[ws] heartbeat timeout room=${ws.room} device=${String(ws.deviceId).slice(0, 8)} — terminating`
+      );
       ws.terminate();
       continue;
     }
