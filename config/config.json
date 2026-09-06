@@ -1,7 +1,9 @@
 {
   "api": "https://api.yogeshmallidi.com",
   "ws": "wss://api.yogeshmallidi.com/ws",
-  "fallbacks": [],
+  "fallbacks": [
+    { "api": "https://backup.yogeshmallidi.com", "ws": "wss://backup.yogeshmallidi.com/ws" }
+  ],
   "support_whatsapp": "+918660095124",
   "price_label": "₹50 / month",
   "trial_days": 7,
