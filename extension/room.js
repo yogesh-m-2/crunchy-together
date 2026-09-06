@@ -1725,11 +1725,12 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       // Hold the announcement: navigating between pages looks exactly like
       // leaving, and they are usually back within a couple of seconds.
       clearTimeout(state.leftTimer);
+      const who = state.partner && state.partner !== "Friend" ? state.partner : "Your friend";
       state.leftTimer = setTimeout(() => {
         if (state.linked) return; // they came back
         title.textContent = "Party open";
-        addLine("", "Your friend left. The party stays open if they come back.", "sys");
-      }, 8000);
+        addLine("", `${who} left. The party stays open if they come back.`, "sys");
+      }, 25000);
       return;
     }
     if (status === "denied") {
@@ -1753,7 +1754,7 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
   };
 
   function onPeerPresent() {
-    const wasRecent = Date.now() - (state.unlinkedAt || 0) < 8000;
+    const wasRecent = Date.now() - (state.unlinkedAt || 0) < 25000;
     state.linked = true;
     clearTimeout(state.leftTimer);
     screenRoom();
@@ -1761,7 +1762,8 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     if (!state.everLinked) {
       addLine("", "Linked. Play, pause and seek are shared from here on.", "sys");
     } else if (!wasRecent) {
-      addLine("", "Reconnected.", "sys");
+      const back = state.partner && state.partner !== "Friend" ? state.partner : "Your friend";
+      addLine("", `${back} is back.`, "sys");
     }
     state.everLinked = true;
     wire({ t: "hello", name: state.name, ep: state.episode, cam: !!state.camStream });
