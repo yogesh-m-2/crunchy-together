@@ -254,13 +254,13 @@
         }
       });
 
-      ws.addEventListener("close", () => {
+      ws.addEventListener("close", (e) => {
         stopHeartbeat();
         if (NET.ws === ws) {
           NET.ws = null;
           NET.role = null;
           stopMedia();
-          NET.onStatus && NET.onStatus("closed");
+          NET.onStatus && NET.onStatus("closed", e && e.code);
         }
         if (!settled) {
           settled = true;

@@ -1741,6 +1741,27 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       }
       return;
     }
+    if (status === "closed" && detail === 4008) {
+      // Another tab in this browser joined the same party.
+      state.linked = false;
+      dot.classList.remove("on");
+      clearTimeout(state.leftTimer);
+      title.textContent = "Open in another tab";
+      render(
+        el("p", {
+          class: "note",
+          text: "This party is now open in another tab of this browser. Use that tab, or rejoin here to take it back.",
+        }),
+        el("button", {
+          class: "act primary",
+          text: "Use this tab instead",
+          onclick: () => joinRoom(state.code),
+        }),
+        el("button", { class: "act", text: "Leave", onclick: leaveRoom })
+      );
+      return;
+    }
+
     if (status === "closed" && !state.leaving && state.code) {
       state.linked = false;
       dot.classList.remove("on");

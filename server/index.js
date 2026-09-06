@@ -331,6 +331,7 @@ wss.on("connection", (ws) => {
   for (const p of [...peers]) {
     if (p.deviceId && ws.deviceId && p.deviceId === ws.deviceId) {
       peers.delete(p);
+      p.replaced = true; // its close is not a departure — same device came back
       console.log(`[ws] replacing stale socket for device=${String(ws.deviceId).slice(0, 8)} room=${ws.room}`);
       try {
         p.close(4008, "replaced");
@@ -378,7 +379,11 @@ wss.on("connection", (ws) => {
         `device=${String(ws.deviceId).slice(0, 8)} code=${code}` +
         `${reason ? ` reason=${reason}` : ""} after=${secs}s peers=${set.size}`
     );
-    for (const p of set) send(p, { t: "peer-left" });
+    // Only announce a departure if this was a real one. A socket replaced by
+    // the same device reconnecting is still present under a new connection.
+    if (!ws.replaced) {
+      for (const p of set) send(p, { t: "peer-left" });
+    }
     if (!set.size) rooms.delete(ws.room);
   });
 
