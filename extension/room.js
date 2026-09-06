@@ -899,6 +899,20 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     return b;
   }
 
+  function screenJoinedEmpty(code) {
+    title.textContent = "Waiting for them";
+    render(
+      el("p", { class: "note", text: `You're in party ${code}, but nobody else is here yet.` }),
+      el("div", { class: "bigcode", text: code }),
+      copyLinkButton(code),
+      el("p", {
+        class: "note",
+        text: "They may have closed their tab. Send them the link and you'll connect as soon as they open it.",
+      }),
+      el("button", { class: "act", text: "Leave", onclick: leaveRoom })
+    );
+  }
+
   function screenHostWaiting(code) {
     title.textContent = "Party open";
     render(
@@ -1636,7 +1650,8 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     screenWaiting(`Joining party ${code}…`);
     const res = await NET.connectRoom(code);
     if (res.ok) {
-      if (NET.role === "host") return screenHostWaiting(code); // we arrived first
+      // Nobody else is in this room yet — we hold it until they arrive.
+      if (NET.role === "host") return screenJoinedEmpty(code);
       return screenWaiting("Connected. Syncing…");
     }
     handleConnectError(res);
@@ -1700,13 +1715,21 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     }
     if (status === "peer-joined") return onPeerPresent();
     if (status === "peer-left") {
+      state.unlinkedAt = Date.now();
       state.linked = false;
       state.partnerCamOn = false;
       state.remoteCam = null;
       refreshCams();
       dot.classList.remove("on");
-      addLine("", "Your friend left. The party stays open if they come back.", "sys");
-      title.textContent = "Party open";
+      title.textContent = "Reconnecting…";
+      // Hold the announcement: navigating between pages looks exactly like
+      // leaving, and they are usually back within a couple of seconds.
+      clearTimeout(state.leftTimer);
+      state.leftTimer = setTimeout(() => {
+        if (state.linked) return; // they came back
+        title.textContent = "Party open";
+        addLine("", "Your friend left. The party stays open if they come back.", "sys");
+      }, 8000);
       return;
     }
     if (status === "denied") {
@@ -1730,9 +1753,17 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
   };
 
   function onPeerPresent() {
+    const wasRecent = Date.now() - (state.unlinkedAt || 0) < 8000;
     state.linked = true;
+    clearTimeout(state.leftTimer);
     screenRoom();
-    addLine("", "Linked. Play, pause and seek are shared from here on.", "sys");
+    // Don't re-announce on every page change — only when this is a real join.
+    if (!state.everLinked) {
+      addLine("", "Linked. Play, pause and seek are shared from here on.", "sys");
+    } else if (!wasRecent) {
+      addLine("", "Reconnected.", "sys");
+    }
+    state.everLinked = true;
     wire({ t: "hello", name: state.name, ep: state.episode, cam: !!state.camStream });
     toPlayer({ type: "request-state" });
     NET.primeMedia();
