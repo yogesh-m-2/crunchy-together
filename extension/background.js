@@ -6,7 +6,7 @@
 
 // Publish config.json here; changing it re-points every installed extension.
 const CONFIG_URL =
-  "https://raw.githubusercontent.com/yogesh-m-2/crunchy-together/main/config/config.json";
+  "https://raw.githubusercontent.com/yogesh-m-2/crunchy-together/main/config.json";
 const CONFIG_TTL = 15 * 60 * 1000; // re-check every 15 minutes
 
 const BUILTIN_CONFIG = {

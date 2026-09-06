@@ -34,6 +34,24 @@
 
   function onLocalEvent(e) {
     if (!video || Date.now() < muteEventsUntil) return;
+
+    // Not the viewer: the page's own player changed state by itself.
+    if (!userDrivenNow()) {
+      if (desired && Date.now() < desired.until && video.paused !== desired.paused) {
+        // Put it back where the party wants it. Silently — no broadcast.
+        muteEventsUntil = Date.now() + 800;
+        if (desired.paused) video.pause();
+        else {
+          const p = video.play();
+          if (p && p.catch) p.catch(() => {});
+        }
+      }
+      return;
+    }
+
+    // A real click or keypress: this is the viewer's intent, so it becomes
+    // the party's intent too.
+    desired = { paused: video.paused, until: Date.now() + 5000 };
     send({
       type: "local-event",
       action: e.type,
@@ -41,6 +59,33 @@
       time: video.currentTime,
     });
   }
+
+  let buffering = false;
+
+  // --- user intent -------------------------------------------------------
+  // A play/pause event counts as the viewer's only if a real interaction
+  // happened just before it. Everything else is the site's own player
+  // reasserting itself, and must not be broadcast.
+  let lastGesture = 0;
+  const GESTURE_WINDOW = 1800;
+  const markGesture = () => (lastGesture = Date.now());
+  for (const ev of ["pointerdown", "mousedown", "keydown", "touchstart"]) {
+    document.addEventListener(ev, markGesture, true);
+  }
+  const userDrivenNow = () => Date.now() - lastGesture < GESTURE_WINDOW;
+
+  // The state we were last told to be in. If the player drifts away from it
+  // on its own, put it back rather than telling the other side.
+  let desired = null; // { paused, until }
+
+  function reportBuffering(on) {
+    if (buffering === on) return;
+    buffering = on;
+    send({ type: "buffering", on, time: video ? video.currentTime : 0 });
+  }
+
+  const onStall = () => reportBuffering(true);
+  const onReady = () => reportBuffering(false);
 
   function attach() {
     const found = document.querySelector("video");
@@ -51,11 +96,21 @@
       for (const ev of ["play", "pause", "seeked"]) {
         video.removeEventListener(ev, onLocalEvent);
       }
+      for (const ev of ["waiting", "stalled"]) video.removeEventListener(ev, onStall);
+      for (const ev of ["playing", "canplay", "canplaythrough"]) {
+        video.removeEventListener(ev, onReady);
+      }
     }
     video = found;
     for (const ev of ["play", "pause", "seeked"]) {
       video.addEventListener(ev, onLocalEvent);
     }
+    // Buffering signals: "waiting"/"stalled" mean the player ran dry.
+    for (const ev of ["waiting", "stalled"]) video.addEventListener(ev, onStall);
+    for (const ev of ["playing", "canplay", "canplaythrough"]) {
+      video.addEventListener(ev, onReady);
+    }
+    buffering = false;
     send({ type: "player-ready" });
   }
 
@@ -65,11 +120,17 @@
       attach();
       return;
     }
+    // readyState < 3 means it can't play through from here — a seek now would
+    // make things worse.
+    const ready = video.readyState >= 3;
+    if (buffering && ready) reportBuffering(false);
     send({
       type: "tick",
       paused: video.paused,
       time: video.currentTime,
       duration: video.duration || 0,
+      ready,
+      buffering,
     });
   }
 
@@ -77,7 +138,13 @@
     if (!video) return;
     const tolerance = msg.tolerance != null ? msg.tolerance : 0.4;
     muteEventsUntil = Date.now() + 1200;
+    // Hold this state for a few seconds against the site's own player.
+    if (typeof msg.paused === "boolean") {
+      desired = { paused: msg.paused, until: Date.now() + 5000 };
+    }
 
+    // Omitting time (auto pause/resume around buffering) must not seek: a
+    // seek discards the buffer the player is trying to build.
     if (typeof msg.time === "number" && Math.abs(video.currentTime - msg.time) > tolerance) {
       video.currentTime = msg.time;
     }

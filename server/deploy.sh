@@ -194,8 +194,12 @@ ufw --force enable >/dev/null || true
 
 echo "==> Starting services"
 systemctl daemon-reload
-systemctl enable --now "$SERVICE"
-systemctl enable --now "$ADMIN_SERVICE"
+systemctl enable "$SERVICE" >/dev/null
+systemctl enable "$ADMIN_SERVICE" >/dev/null
+# restart, not just "enable --now": an already-running service would otherwise
+# keep serving the old code even though new files are on disk.
+systemctl restart "$SERVICE"
+systemctl restart "$ADMIN_SERVICE"
 systemctl restart caddy
 sleep 4
 
