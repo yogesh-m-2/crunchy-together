@@ -514,7 +514,9 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
       const res = await NET.startSignIn();
       btn.disabled = false;
       btn.textContent = "Sign in";
-      if (!res || !res.url) return screenSignIn("Couldn't reach the sign-in service.");
+      if (!res || !res.url) {
+        return screenUnreachable("Couldn't reach the sign-in service.");
+      }
       if (!/^https:\/\//i.test(res.url)) {
         // Almost always PUBLIC_URL missing on the server, which yields a
         // relative link the browser can't open.
@@ -775,6 +777,7 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
           boot();
         },
       }),
+      el("button", { class: "act", text: "Sign in instead", onclick: () => screenSignIn() }),
       supportButton("Hi, Otaku Sync can't reach the server."),
       el("p", { class: "note", text: `Support: ${NET.support()} (WhatsApp only)` })
     );
@@ -1907,15 +1910,26 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     // No token yet: start the trial silently. Nobody should have to create an
     // account before they've seen the thing work.
     render(el("p", { class: "note", text: "Getting things ready…" }));
-    const res = await NET.startGuest();
+
+    // The server may be restarting or the network may have blinked. Give it a
+    // few tries before showing anything alarming.
+    let res = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await NET.startGuest();
+      if (res && (res.token || res.error === "device-limit")) break;
+      if (attempt < 2) {
+        render(el("p", { class: "note", text: "Connecting…" }));
+        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      }
+    }
+
     if (res && res.token) {
       await NET.setToken(res.token);
       state.me = res.me;
       return afterAuth();
     }
     if (res && res.error === "device-limit") return screenDeviceLimit(res);
-    // Couldn't start a trial — signing in is the way forward.
-    screenSignIn(res && res.error === "unreachable" ? "Couldn't reach the server." : null);
+    screenUnreachable("Couldn't reach Otaku Sync just now.");
   }
 
   mount();

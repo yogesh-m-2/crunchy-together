@@ -9,8 +9,8 @@
   // Shipped defaults — used only until the GitHub config is fetched, and as a
   // last resort if it can't be reached.
   const BUILTIN = {
-    api: "https://api.YOURDOMAIN.com",
-    ws: "wss://api.YOURDOMAIN.com/ws",
+    api: "https://api.yogeshmallidi.com",
+    ws: "wss://api.yogeshmallidi.com/ws",
     fallbacks: [],
     support_whatsapp: SUPPORT_WHATSAPP,
     price_label: "₹50 / month",

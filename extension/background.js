@@ -10,8 +10,8 @@ const CONFIG_URL =
 const CONFIG_TTL = 15 * 60 * 1000; // re-check every 15 minutes
 
 const BUILTIN_CONFIG = {
-  api: "https://api.YOURDOMAIN.com",
-  ws: "wss://api.YOURDOMAIN.com/ws",
+  api: "https://api.yogeshmallidi.com",
+  ws: "wss://api.yogeshmallidi.com/ws",
   fallbacks: [],
   support_whatsapp: "+918660095124",
   price_label: "₹50 / month",
