@@ -321,14 +321,15 @@ server.on("upgrade", (req, socket, head) => {
 wss.on("connection", (ws) => {
   const peers = roomOf(ws.room);
 
-  // A refresh or reconnect leaves the previous socket open until the
-  // heartbeat times it out, and that ghost holds the second slot. If the same
-  // device (or the same account) is already here, it is the same person
-  // coming back — retire the old socket instead of refusing the new one.
+  // A refresh leaves the previous socket open until the heartbeat times it
+  // out, and that ghost holds the second slot. Retire it when the SAME DEVICE
+  // reconnects — that is genuinely the same tab coming back.
+  //
+  // Deliberately not matched on user id: two windows signed into one account
+  // are a normal way to watch (and to test), and evicting on user turns into
+  // a loop where each connection kicks the other out forever.
   for (const p of [...peers]) {
-    const sameDevice = p.deviceId && ws.deviceId && p.deviceId === ws.deviceId;
-    const sameUser = p.userId && ws.userId && p.userId === ws.userId;
-    if (sameDevice || sameUser) {
+    if (p.deviceId && ws.deviceId && p.deviceId === ws.deviceId) {
       peers.delete(p);
       try {
         p.close(4008, "replaced");
