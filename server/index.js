@@ -320,6 +320,22 @@ server.on("upgrade", (req, socket, head) => {
 
 wss.on("connection", (ws) => {
   const peers = roomOf(ws.room);
+
+  // A refresh or reconnect leaves the previous socket open until the
+  // heartbeat times it out, and that ghost holds the second slot. If the same
+  // device (or the same account) is already here, it is the same person
+  // coming back — retire the old socket instead of refusing the new one.
+  for (const p of [...peers]) {
+    const sameDevice = p.deviceId && ws.deviceId && p.deviceId === ws.deviceId;
+    const sameUser = p.userId && ws.userId && p.userId === ws.userId;
+    if (sameDevice || sameUser) {
+      peers.delete(p);
+      try {
+        p.close(4008, "replaced");
+      } catch (_) {}
+    }
+  }
+
   if (peers.size >= 2) {
     send(ws, { t: "denied", reason: "room-full" });
     return ws.close(4004, "room-full");
@@ -365,7 +381,7 @@ setInterval(() => {
       ws.ping();
     } catch (_) {}
   }
-}, 30000).unref();
+}, 15000).unref();
 
 // Re-check entitlement periodically: a trial can lapse mid-session. This runs
 // every few minutes, never on the message path, and uses one query for all

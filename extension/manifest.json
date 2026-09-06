@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Otaku Sync",
-  "version": "5.2.1",
+  "version": "5.3.0",
   "description": "Watch anime together in sync \u2014 shared play/pause/seek, webcam, chat, GIFs and floating reactions.",
   "permissions": [
     "storage"

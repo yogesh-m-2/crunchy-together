@@ -274,7 +274,9 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
 .msg.them .who { color: #7fb7ff; }
 .msg.sys { color: #8b93a7; font: 11px ui-monospace, monospace; }
 .msg img.gif { max-width: 100%; max-height: 150px; border-radius: 6px; display: block; margin-top: 3px; }
-.status { display: flex; justify-content: space-between; font: 11px ui-monospace, monospace; color: #8b93a7; }
+.status { display: flex; align-items: center; gap: 8px; font: 11px ui-monospace, monospace; color: #8b93a7; }
+.status > div:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status button.act.mini { padding: 3px 10px; font-size: 11px; }
 
 .camwrap { display: flex; align-items: center; gap: 4px; }
 .camwrap.empty { display: none; }
@@ -917,6 +919,22 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     const time = el("div", { text: "00:00" });
     const who = el("div", { text: `${state.partner} · ${state.code || ""}` });
 
+    const shareBtn = el("button", { class: "act mini", text: "Share" });
+    shareBtn.title = "Copy the invite link for this party";
+    shareBtn.addEventListener("click", () => {
+      if (!state.code) return;
+      navigator.clipboard.writeText(shareUrl(state.code)).then(
+        () => {
+          shareBtn.textContent = "Copied";
+          setTimeout(() => (shareBtn.textContent = "Share"), 1400);
+        },
+        () => {
+          shareBtn.textContent = "Use the address bar";
+          setTimeout(() => (shareBtn.textContent = "Share"), 2500);
+        }
+      );
+    });
+
     input.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || !input.value.trim()) return;
       const text = input.value.trim();
@@ -965,7 +983,7 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     gifBtn.addEventListener("click", () => setDrawer("gif"));
 
     render(
-      el("div", { class: "status" }, [who, time]),
+      el("div", { class: "status" }, [who, shareBtn, time]),
       cams,
       log,
       reacts,
