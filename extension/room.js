@@ -1108,9 +1108,10 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
           loadImg(img, g.preview);
           img.addEventListener("click", () => {
             if (!state.linked) return;
-            wire({ t: "gif", url: g.full });
+            const url = g.small || g.preview || g.full;
+            wire({ t: "gif", url });
             NET.count("gif_sent");
-            gifAll(g.full);
+            gifAll(url);
           });
           return img;
         })
@@ -1155,9 +1156,22 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     img.src = safe;
   }
 
+  const MAX_FLOATING_GIFS = 4;
+  const floatingGifs = [];
+
   function spawnGif(url) {
     const safe = safeGifUrl(url);
     if (!safe) return;
+
+    // Retire the oldest rather than letting them pile up.
+    while (floatingGifs.length >= MAX_FLOATING_GIFS) {
+      const old = floatingGifs.shift();
+      if (old) {
+        old.src = "";        // stop decoding immediately
+        old.remove();
+      }
+    }
+
     const img = el("img", { class: "fx-gif", alt: "GIF" });
     img.style.left = 4 + Math.random() * 72 + "vw";
     img.style.width = 110 + Math.random() * 50 + "px";
@@ -1165,7 +1179,13 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
     img.style.animationDuration = (5 + Math.random() * 1.5).toFixed(2) + "s";
     loadImg(img, safe);
     fxLayer.appendChild(img);
-    setTimeout(() => img.remove(), 7000);
+    floatingGifs.push(img);
+    setTimeout(() => {
+      const i = floatingGifs.indexOf(img);
+      if (i >= 0) floatingGifs.splice(i, 1);
+      img.src = "";
+      img.remove();
+    }, 7000);
   }
 
   function gifAll(url) {
@@ -1407,7 +1427,9 @@ input.code { font: 600 15px/1.4 ui-monospace, monospace; letter-spacing: .15em; 
   // Remote audio needs its own element — a cam tile only exists when video is
   // actually flowing, but voice should work with cameras off.
   function playRemoteAudio(stream) {
-    if (!stream || !stream.getAudioTracks().length) {
+    const hasLiveAudio =
+      stream && stream.getAudioTracks().some((t) => t.readyState === "live");
+    if (!hasLiveAudio) {
       if (state.remoteAudio) {
         state.remoteAudio.srcObject = null;
         state.remoteAudio.remove();

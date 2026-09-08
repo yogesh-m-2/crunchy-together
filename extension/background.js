@@ -196,8 +196,11 @@ async function handleApi(msg, sender) {
       .map((g) => {
         const imgs = g.images || {};
         const preview = (imgs.fixed_width_small || imgs.fixed_width || {}).url;
+        // "small" is what actually gets animated on screen; keep it modest.
+        const small =
+          (imgs.fixed_width_small || imgs.preview_gif || imgs.fixed_width || {}).url;
         const full = (imgs.fixed_width || imgs.original || {}).url;
-        return preview && full ? { preview, full } : null;
+        return preview && full ? { preview, small: small || preview, full } : null;
       })
       .filter(Boolean);
     return { gifs };

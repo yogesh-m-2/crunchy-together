@@ -329,8 +329,22 @@ input:focus { outline: none; border-color: #ffb03b; }
     setTimeout(() => span.remove(), 4200);
   }
 
+  const FS_MAX_GIFS = 4;
+  const fsGifs = [];
+
   function fsSpawnGif(url) {
     if (!fsFx) return;
+
+    // Same cap as the panel: unbounded animated GIFs over a decoding video
+    // is what exhausts the renderer.
+    while (fsGifs.length >= FS_MAX_GIFS) {
+      const old = fsGifs.shift();
+      if (old) {
+        old.src = "";
+        old.remove();
+      }
+    }
+
     const img = fsEl("img", { alt: "GIF" });
     img.className = "fx";
     img.style.left = 4 + Math.random() * 72 + "vw";
@@ -342,7 +356,13 @@ input:focus { outline: none; border-color: #ffb03b; }
     img.addEventListener("error", () => img.remove());
     img.src = url;
     fsFx.appendChild(img);
-    setTimeout(() => img.remove(), 7000);
+    fsGifs.push(img);
+    setTimeout(() => {
+      const i = fsGifs.indexOf(img);
+      if (i >= 0) fsGifs.splice(i, 1);
+      img.src = "";
+      img.remove();
+    }, 7000);
   }
 
   // ---------------------------------------------------------- messaging

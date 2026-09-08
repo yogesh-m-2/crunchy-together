@@ -319,6 +319,7 @@
   let pc = null;
   let camSender = null;
   let micSender = null;
+  let inbound = null;   // one stream holding every track they send us
   let makingOffer = false;
   let ignoreOffer = false;
 
@@ -332,11 +333,25 @@
       if (e.candidate) NET.send({ t: "rtc", kind: "ice", candidate: e.candidate });
     });
 
+    // Audio and video arrive as separate track events. Accumulate them into
+    // ONE stream — replacing the stream per track meant a camera turning on
+    // would drop the microphone that was already flowing.
+    inbound = new MediaStream();
     pc.addEventListener("track", (e) => {
-      const stream = e.streams[0] || new MediaStream([e.track]);
-      NET.onRemoteStream && NET.onRemoteStream(stream);
+      if (!inbound.getTracks().includes(e.track)) inbound.addTrack(e.track);
+      NET.onRemoteStream && NET.onRemoteStream(inbound);
       e.track.addEventListener("ended", () => {
-        NET.onRemoteStream && NET.onRemoteStream(null);
+        try {
+          inbound.removeTrack(e.track);
+        } catch (_) {}
+        // Still something coming through? Keep it; only clear when empty.
+        NET.onRemoteStream && NET.onRemoteStream(inbound.getTracks().length ? inbound : null);
+      });
+      e.track.addEventListener("mute", () => {
+        NET.onRemoteStream && NET.onRemoteStream(inbound);
+      });
+      e.track.addEventListener("unmute", () => {
+        NET.onRemoteStream && NET.onRemoteStream(inbound);
       });
     });
 
@@ -429,6 +444,7 @@
     pc = null;
     camSender = null;
     micSender = null;
+    inbound = null;
     makingOffer = false;
     ignoreOffer = false;
     NET.onRemoteStream && NET.onRemoteStream(null);
