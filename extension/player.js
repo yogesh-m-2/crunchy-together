@@ -68,7 +68,30 @@
   // reasserting itself, and must not be broadcast.
   let lastGesture = 0;
   const GESTURE_WINDOW = 1800;
-  const markGesture = () => (lastGesture = Date.now());
+  let pendingPlay = false;
+
+  function tryPlay() {
+    if (!video) return;
+    const p = video.play();
+    if (p && p.catch) {
+      p.catch(() => {
+        // Blocked by autoplay policy. Queue it: the next click, key press or
+        // scroll in this tab satisfies Chrome and we start immediately.
+        pendingPlay = true;
+        send({ type: "play-blocked" });
+      });
+    }
+  }
+
+  const markGesture = () => {
+    lastGesture = Date.now();
+    if (pendingPlay && video && video.paused) {
+      pendingPlay = false;
+      muteEventsUntil = Date.now() + 800; // our own catch-up, not their intent
+      const p = video.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+  };
   for (const ev of ["pointerdown", "mousedown", "keydown", "touchstart"]) {
     document.addEventListener(ev, markGesture, true);
   }
@@ -151,11 +174,9 @@
 
     if (msg.paused === true && !video.paused) {
       video.pause();
+      pendingPlay = false;
     } else if (msg.paused === false && video.paused) {
-      const p = video.play();
-      if (p && p.catch) {
-        p.catch(() => send({ type: "play-blocked" }));
-      }
+      tryPlay();
     }
 
     // Fresh state report shortly after applying, so the other side's

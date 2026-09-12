@@ -338,21 +338,25 @@
     // would drop the microphone that was already flowing.
     inbound = new MediaStream();
     pc.addEventListener("track", (e) => {
+      // Every handler below can fire after the connection is torn down (cam
+      // off, leaving a party, reconnect), by which point `inbound` is null.
+      if (!inbound) return;
       if (!inbound.getTracks().includes(e.track)) inbound.addTrack(e.track);
       NET.onRemoteStream && NET.onRemoteStream(inbound);
+
       e.track.addEventListener("ended", () => {
+        if (!inbound) return;
         try {
           inbound.removeTrack(e.track);
         } catch (_) {}
         // Still something coming through? Keep it; only clear when empty.
         NET.onRemoteStream && NET.onRemoteStream(inbound.getTracks().length ? inbound : null);
       });
-      e.track.addEventListener("mute", () => {
-        NET.onRemoteStream && NET.onRemoteStream(inbound);
-      });
-      e.track.addEventListener("unmute", () => {
-        NET.onRemoteStream && NET.onRemoteStream(inbound);
-      });
+      const nudge = () => {
+        if (inbound) NET.onRemoteStream && NET.onRemoteStream(inbound);
+      };
+      e.track.addEventListener("mute", nudge);
+      e.track.addEventListener("unmute", nudge);
     });
 
     pc.addEventListener("negotiationneeded", async () => {
